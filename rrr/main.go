@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
+	"math/big"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
 	"strconv"
 
 	"github.com/btcsuite/btcd/blockchain"
@@ -59,20 +62,16 @@ func loadBlockDB() (database.DB, error) {
 }
 
 func main() {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	// Load the block database.
 	db, err := loadBlockDB()
 	if err != nil {
 		log.Fatalf("Failed to load database: %v", err)
 	}
 	defer db.Close()
-
-	f, err := os.Create("rrr.pprof")
-	if err != nil {
-		log.Panic(err)
-	}
-	defer f.Close()
-	pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
 
 	lowestBlock, err := strconv.Atoi(os.Args[1])
 	if err != nil {
@@ -120,13 +119,13 @@ func main() {
 					if err != nil {
 						continue // TODO
 					}
-					pubKey, err := btcec.ParsePubKey(pushedData[1], btcec.S256())
+					x, ybit, err := ParsePubKey(pushedData[1])
 					if err != nil {
 						continue // TODO
 					}
 					rFound += 1
 
-					fmt.Println(h, txN, txInN, sig.R.Text(16), pubKey.X.Text(16), pubKey.Y.Text(16))
+					fmt.Println(h, txN, txInN, sig.R.Text(16), x.Text(16), ybit)
 				}
 			}
 
@@ -146,4 +145,45 @@ func main() {
 	}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+const (
+	pubkeyCompressed   byte = 0x2 // y_bit + x coord
+	pubkeyUncompressed byte = 0x4 // x coord + y coord
+	pubkeyHybrid       byte = 0x6 // y_bit + x coord + y coord
+)
+
+func ParsePubKey(pubKeyStr []byte) (x *big.Int, ybit int, err error) {
+	if len(pubKeyStr) == 0 {
+		return nil, 0, errors.New("pubkey string is empty")
+	}
+
+	format := pubKeyStr[0]
+	ybit = int(format & 0x1)
+	format &= ^byte(0x1)
+
+	switch len(pubKeyStr) {
+	case btcec.PubKeyBytesLenUncompressed:
+		if format != pubkeyUncompressed && format != pubkeyHybrid {
+			return nil, 0, fmt.Errorf("invalid magic in pubkey str: "+
+				"%d", pubKeyStr[0])
+		}
+
+		x = new(big.Int).SetBytes(pubKeyStr[1:33])
+		if format == pubkeyUncompressed {
+			y := new(big.Int).SetBytes(pubKeyStr[33:])
+			ybit = int(y.Bit(0))
+		}
+	case btcec.PubKeyBytesLenCompressed:
+		if format != pubkeyCompressed {
+			return nil, 0, fmt.Errorf("invalid magic in compressed "+
+				"pubkey string: %d", pubKeyStr[0])
+		}
+		x = new(big.Int).SetBytes(pubKeyStr[1:33])
+	default: // wrong!
+		return nil, 0, fmt.Errorf("invalid pub key length %d",
+			len(pubKeyStr))
+	}
+
+	return
 }
