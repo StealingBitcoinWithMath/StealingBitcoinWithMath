@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/btcec"
@@ -125,7 +126,7 @@ func main() {
 					}
 					rFound += 1
 
-					fmt.Println(h, txN, txInN, sig.R.Text(16), x.Text(16), ybit)
+					fmt.Println(h, tx.TxSha(), txInN, pad(sig.R.Text(16)), pad(x.Text(16)), ybit)
 				}
 			}
 
@@ -186,4 +187,16 @@ func ParsePubKey(pubKeyStr []byte) (x *big.Int, ybit int, err error) {
 	}
 
 	return
+}
+
+var padLen = (btcec.S256().BitSize + 7) / 8 * 2
+
+func pad(s string) string {
+	if len(s) == padLen {
+		return s
+	}
+	if len(s) > padLen {
+		panic(s)
+	}
+	return strings.Repeat("0", padLen-len(s)) + s
 }
